@@ -1,5 +1,0 @@
-{% extends "base.html" %}{% block title %}بکاپ{% endblock %}
-{% block body %}<h1>بکاپ دیتابیس</h1>
-<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button>ساخت بکاپ جدید</button></form><br>
-<div class="card"><table>{% for n, kb in files %}<tr><td><a href="{{ url_for('backup_dl', name=n) }}"><code>{{ n }}</code></a></td><td>{{ kb }} KB</td></tr>
-{% else %}<tr><td class="mut">بکاپی نیست. بکاپ خودکار روزانه ساعت ۰۳:۰۰ انجام می‌شود.</td></tr>{% endfor %}</table></div>{% endblock %}

@@ -1,6 +1,0 @@
-{% extends "base.html" %}{% block title %}ورود{% endblock %}
-{% block body %}<div class="card" style="max-width:360px;margin:60px auto"><h1>ورود به پنل</h1>
-<form method="post" class="row" style="flex-direction:column;align-items:stretch"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-<input name="username" placeholder="نام کاربری" autocomplete="username" required autofocus>
-<input name="password" type="password" placeholder="رمز عبور" autocomplete="current-password" required>
-<button>ورود</button></form></div>{% endblock %}
