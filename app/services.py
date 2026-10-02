@@ -24,87 +24,33 @@ def hash_exists(h: str) -> bool:
     return db.one("SELECT id FROM transactions WHERE tx_hash=%s", (h,)) is not None
 
 
-# tonapi.io (free, no key) exposes a tx by its own hash, but what users paste
-# from a wallet app is very often the *message* hash instead — a different
-# value on TON (unlike Ethereum/Tron, where the tx hash is the only hash a
-# user ever sees). Try both lookups; whichever answers first wins.
-_TONAPI_LOOKUPS = (
-    "https://tonapi.io/v2/blockchain/transactions/{h}",
-    "https://tonapi.io/v2/blockchain/messages/{h}/transaction",
-)
-
-
-# TRON's first-party free node (api.trongrid.io) answers gettransactionbyid
-# without a key at a low rate limit; visible=true asks it to return
-# addresses in base58 instead of raw hex, which we need for a readable
-# "from/to" and to recognize the USDT-TRC20 contract address below.
-_TRONGRID_TX_URL = "https://api.trongrid.io/wallet/gettransactionbyid"
-_USDT_TRC20_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
-_ERC20_TRANSFER_SELECTOR = "a9059cbb"
-
-
-def detect_trx_tx(h: str) -> dict | None:
-    """مثل detect_ton_tx ولی برای شبکه‌ی ترون، از طریق TronGrid (بدون کلید):
-    هم انتقال خالص TRX را می‌فهمد، هم انتقال USDT (TRC-20) را (از روی
-    فراخوانی استاندارد transfer(address,uint256) دیکد می‌شود — توکن‌های
-    TRC-20 دیگر پشتیبانی نمی‌شوند تا مبلغ/واحد غلط حدس زده نشود)."""
-    try:
-        r = requests.post(_TRONGRID_TX_URL, json={"value": h, "visible": True}, timeout=10)
-        if r.status_code != 200:
-            return None
-        data = r.json()
-        contract = (data.get("raw_data") or {}).get("contract") or []
-        if not contract:
-            return None
-        c = contract[0]
-        val = (c.get("parameter") or {}).get("value") or {}
-        ctype = c.get("type")
-
-        if ctype == "TransferContract":
-            amount_sun = val.get("amount")
-            if amount_sun is None:
-                return None
-            amount = (Decimal(str(amount_sun)) / Decimal(10**6)).quantize(Decimal("0.000000000001"))
-            if amount <= 0:
-                return None
-            return {"network": "TRON", "currency": "TRX", "amount": amount,
-                    "from": val.get("owner_address"), "to": val.get("to_address")}
-
-        if ctype == "TriggerSmartContract" and val.get("contract_address") == _USDT_TRC20_CONTRACT:
-            call_data = val.get("data") or ""
-            if not call_data.startswith(_ERC20_TRANSFER_SELECTOR) or len(call_data) < 8 + 64 + 64:
-                return None
-            recipient_hex = call_data[8 + 24:8 + 64]
-            amount_hex = call_data[8 + 64:8 + 128]
-            amount = (Decimal(int(amount_hex, 16)) / Decimal(10**6)).quantize(Decimal("0.000000000001"))
-            if amount <= 0:
-                return None
-            return {"network": "TRON", "currency": "USDT", "amount": amount,
-                    "from": val.get("owner_address"), "to": f"0x41{recipient_hex} (hex)"}
-        return None
-    except Exception as e:
-        log.warning("trongrid lookup failed: %s", e)
-        return None
-
-
 def detect_tx(h: str) -> dict | None:
     """تلاش برای شناسایی خودکار شبکه/ارز/مقدار یک Hash، اول TON سپس TRON؛
     اگر هیچ‌کدام جواب ندادند None (یعنی ورود دستی لازم است)."""
     return detect_ton_tx(h) or detect_trx_tx(h)
 
 
+# TON has no single official REST API the way most chains do; these three
+# (in order) are the ones that actually expose a free, no-key, hash-based
+# lookup. What a wallet app shows/copies is very often the tx's *message*
+# hash, not the transaction hash itself (a TON-specific distinction) — so
+# both are tried before giving up on tonapi.io, and toncenter.com (the TON
+# Foundation's own API) is tried last as a second independent source.
+_TONAPI_TX_URL = "https://tonapi.io/v2/blockchain/transactions/{h}"
+_TONAPI_MSG_URL = "https://tonapi.io/v2/blockchain/messages/{h}/transaction"
+_TONCENTER_TX_URL = "https://toncenter.com/api/v3/transactions"
+
+
 def detect_ton_tx(h: str) -> dict | None:
-    """بالقوه شبکه/ارز/مقدار/فرستنده/گیرنده را از روی Hash تراکنش TON حدس می‌زند
-    (بدون نیاز به API Key، از tonapi.io). اگر چیزی پیدا/فهمیده نشود None
-    برمی‌گرداند — هیچ‌وقت استثنا پرتاب نمی‌کند، تا جریان ورود دستی همیشه
-    به‌عنوان جایگزین کار کند و هرگز مبلغ حدسی/نادرست ثبت نشود."""
-    for pattern in _TONAPI_LOOKUPS:
+    """شبکه/ارز/مقدار/فرستنده/گیرنده را از روی Hash تراکنش TON حدس می‌زند
+    (بدون نیاز به API Key). هیچ‌وقت استثنا پرتاب نمی‌کند — شکست یعنی None،
+    تا جریان ورود دستی همیشه جایگزین کار کند و هرگز مبلغ حدسی ثبت نشود."""
+    for url in (_TONAPI_TX_URL.format(h=h), _TONAPI_MSG_URL.format(h=h)):
         try:
-            r = requests.get(pattern.format(h=h), timeout=10)
+            r = requests.get(url, timeout=10)
             if r.status_code != 200:
                 continue
-            data = r.json()
-            in_msg = data.get("in_msg") or {}
+            in_msg = r.json().get("in_msg") or {}
             value = in_msg.get("value")
             if value is None:
                 continue
@@ -118,9 +64,75 @@ def detect_ton_tx(h: str) -> dict | None:
                 "to": dst.get("address") if isinstance(dst, dict) else dst,
             }
         except Exception as e:
-            log.warning("tonapi lookup failed for %s: %s", pattern, e)
-            continue
+            log.warning("tonapi lookup failed for %s: %s", url, e)
+
+    try:
+        r = requests.get(_TONCENTER_TX_URL, params={"hash": h, "limit": 1}, timeout=10)
+        if r.status_code == 200:
+            txs = r.json().get("transactions") or []
+            if txs:
+                in_msg = txs[0].get("in_msg") or {}
+                value = in_msg.get("value")
+                if value is not None:
+                    amount = (Decimal(str(value)) / Decimal(10**9)).quantize(Decimal("0.000000000001"))
+                    if amount > 0:
+                        return {
+                            "network": "TON", "currency": "TON", "amount": amount,
+                            "from": in_msg.get("source"), "to": in_msg.get("destination"),
+                        }
+    except Exception as e:
+        log.warning("toncenter lookup failed: %s", e)
     return None
+
+
+# apilist.tronscanapi.com (free, no key at low rate) already decodes
+# TRC-20 transfers for us (symbol, decimals, from/to) — far more reliable
+# than hand-parsing TronGrid's raw contract call data, and it works for
+# every TRC-20 token, not just USDT.
+_TRONSCAN_TX_URL = "https://apilist.tronscanapi.com/api/transaction-info"
+
+
+def detect_trx_tx(h: str) -> dict | None:
+    """مثل detect_ton_tx ولی برای شبکه‌ی ترون (از طریق Tronscan، بدون کلید):
+    هم انتقال خالص TRX را می‌فهمد، هم هر انتقال توکن TRC-20 (از جمله
+    USDT) را — نماد و تعداد رقم اعشار مستقیماً از خودِ API می‌آید، حدس زده
+    نمی‌شود."""
+    try:
+        r = requests.get(_TRONSCAN_TX_URL, params={"hash": h}, timeout=10)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        if not data or not data.get("hash"):
+            return None  # "hash not found" comes back as 200 + {}
+        if data.get("contractRet") not in (None, "SUCCESS"):
+            return None  # failed/reverted on-chain — not a real transfer
+
+        trc20 = data.get("trc20TransferInfo") or []
+        if trc20:
+            t = trc20[0]
+            if t.get("status") != 0:
+                return None
+            try:
+                amount = (Decimal(t["amount_str"]) / Decimal(10 ** int(t["decimals"]))
+                          ).quantize(Decimal("0.000000000001"))
+            except Exception:
+                return None
+            if amount <= 0:
+                return None
+            return {"network": "TRON", "currency": (t.get("symbol") or "TRC20").upper(),
+                    "amount": amount, "from": t.get("from_address"), "to": t.get("to_address")}
+
+        amount_sun = (data.get("contractData") or {}).get("amount")
+        if amount_sun is None:
+            return None
+        amount = (Decimal(str(amount_sun)) / Decimal(10**6)).quantize(Decimal("0.000000000001"))
+        if amount <= 0:
+            return None
+        return {"network": "TRON", "currency": "TRX", "amount": amount,
+                "from": data.get("ownerAddress"), "to": data.get("toAddress")}
+    except Exception as e:
+        log.warning("tronscan lookup failed: %s", e)
+        return None
 
 
 def parse_amount(raw: str) -> Decimal | None:
