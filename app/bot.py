@@ -5,13 +5,19 @@ import re
 from datetime import datetime, time as dtime, timedelta
 from functools import wraps
 
-from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup as M, Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 from . import config, db, fragment, services
 
 log = logging.getLogger("hashbot")
+
+
+def B(text: str, data: str) -> InlineKeyboardButton:
+    return InlineKeyboardButton(text, callback_data=data)
+
+
 esc = lambda s: html.escape(str(s))
 MENU_BTN = [B("🏠 منوی اصلی", "menu")]
 CANCEL = M([MENU_BTN])
