@@ -25,7 +25,7 @@ case "${1:-help}" in
     mkdir -p "$APP_DIR/backups"
     f="$APP_DIR/backups/backup_$(date +%Y%m%d_%H%M%S).sql.gz"
     ( umask 077; MYSQL_PWD="$DB_PASSWORD" mysqldump -h "$DB_HOST" -u "$DB_USER" --single-transaction \
-        --no-tablespaces "$DB_NAME" | gzip > "$f" )
+        "$DB_NAME" | gzip > "$f" )
     [[ $EUID -eq 0 ]] && chown "$APP_USER:$APP_USER" "$f"
     ls -1t "$APP_DIR"/backups/backup_*.sql.gz | tail -n +15 | xargs -r rm --
     echo "✅ $f" ;;

@@ -40,12 +40,20 @@ fi
 [[ $DOMAIN =~ ^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]       || { echo "دامنه نامعتبر است."; exit 1; }
 [[ $PANEL_USER =~ ^[A-Za-z0-9_.-]{3,32}$ ]]           || { echo "نام کاربری نامعتبر است."; exit 1; }
 
+if [[ -e /etc/mysql/FROZEN ]]; then
+  echo "❌ MySQL در حالت frozen است (دیتای قدیمی MariaDB روی سرور). README بخش «عیب‌یابی» را ببینید."; exit 1
+fi
+WEB_PORT=${WEB_PORT:-8000}
+if ss -tln | grep -q ":$WEB_PORT " && ! systemctl is-active -q hashbot-web; then
+  echo "❌ پورت $WEB_PORT اشغال است. با WEB_PORT=8123 sudo -E ./install.sh دوباره اجرا کنید."; exit 1
+fi
+
 echo "== نصب بسته‌ها =="
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq python3 python3-venv python3-pip mysql-server nginx certbot python3-certbot-nginx \
+apt-get install -y -qq python3 python3-venv python3-pip mariadb-server nginx certbot python3-certbot-nginx \
   ufw git rsync openssl cron curl
-systemctl enable --now mysql cron nginx
+systemctl enable --now mariadb cron nginx
 
 echo "== کاربر و فایل‌ها =="
 id "$APP_USER" &>/dev/null || useradd --system --home "$APP_DIR" --shell /usr/sbin/nologin "$APP_USER"
@@ -64,7 +72,7 @@ cat > /etc/mysql/conf.d/hashbot.cnf <<CNF
 bind-address = 127.0.0.1
 local_infile = 0
 CNF
-systemctl restart mysql
+systemctl restart mariadb
 mysql <<SQL
 CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
@@ -101,11 +109,11 @@ runuser -u "$APP_USER" -- "$APP_DIR/venv/bin/pip" install -q -r "$APP_DIR/requir
 echo "== systemd =="
 for svc in bot web; do
   if [[ $svc == bot ]]; then EXEC="$APP_DIR/venv/bin/python -m app.bot"; DESC="Telegram bot"
-  else EXEC="$APP_DIR/venv/bin/gunicorn -w 1 --threads 4 -b 127.0.0.1:8000 app.web:app"; DESC="admin panel"; fi
+  else EXEC="$APP_DIR/venv/bin/gunicorn -w 1 --threads 4 -b 127.0.0.1:$WEB_PORT app.web:app"; DESC="admin panel"; fi
   cat > "/etc/systemd/system/hashbot-$svc.service" <<UNIT
 [Unit]
 Description=Hashbot $DESC
-After=network-online.target mysql.service
+After=network-online.target mariadb.service
 Wants=network-online.target
 
 [Service]
@@ -138,7 +146,7 @@ server {
     add_header Strict-Transport-Security "max-age=31536000" always;
     location /admin {
         limit_req zone=hashbot burst=20 nodelay;
-        proxy_pass http://127.0.0.1:8000;
+        proxy_pass http://127.0.0.1:$WEB_PORT;
         proxy_set_header Host \$host;
         proxy_set_header X-Forwarded-For \$remote_addr;
         proxy_set_header X-Forwarded-Proto \$scheme;
@@ -147,7 +155,6 @@ server {
 }
 NGINX
 ln -sf /etc/nginx/sites-available/hashbot /etc/nginx/sites-enabled/hashbot
-rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl reload nginx
 if ! certbot --nginx -d "$DOMAIN" -m "$LE_EMAIL" --agree-tos --no-eff-email --redirect -n; then
   echo "⚠️ دریافت SSL ناموفق بود (آیا DNS دامنه به این سرور اشاره می‌کند؟)."
@@ -157,9 +164,16 @@ fi
 
 echo "== فایروال و بکاپ خودکار =="
 SSH_PORT=$(awk '/^Port /{print $2; exit}' /etc/ssh/sshd_config 2>/dev/null || true)
-ufw allow "${SSH_PORT:-22}/tcp" >/dev/null
-ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null
-ufw --force enable >/dev/null
+if ufw status | grep -q "Status: active"; then
+  ufw allow "${SSH_PORT:-22}/tcp" >/dev/null; ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null
+else
+  echo "فایروال ufw الان غیرفعال است. فعال‌سازی ممکن است پورت‌های سرویس‌های دیگر این سرور را ببندد."
+  read -rp "فعال شود؟ (y/N): " yn
+  if [[ $yn == [yY] ]]; then
+    ufw allow "${SSH_PORT:-22}/tcp" >/dev/null; ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null
+    ufw --force enable >/dev/null
+  fi
+fi
 echo "0 3 * * * $APP_USER $APP_DIR/manage.sh backup >/dev/null 2>&1" > /etc/cron.d/hashbot
 chmod 644 /etc/cron.d/hashbot
 

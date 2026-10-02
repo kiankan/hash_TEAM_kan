@@ -30,3 +30,14 @@ sudo hashbot passwd            # تغییر رمز ادمین پنل
 
 ## امنیت
 فقط Telegram ID های مجاز (لیست سفید) • رمز پنل با hash (scrypt) • نشست امن (Secure/HttpOnly/SameSite، انقضای ۲ ساعته) • CSRF • Rate Limit روی ورود و Nginx • HTTPS + HSTS • ufw • MySQL فقط روی 127.0.0.1 با کاربر اختصاصی (SELECT/INSERT/UPDATE/DELETE/LOCK) • `.env` با دسترسی 600 • لاگ ورودهای پنل • سرویس‌ها با کاربر غیر root و محدودیت‌های systemd.
+
+## عیب‌یابی
+**`MySQL has been frozen` / `incompatible downgrade`:** روی سرور دیتای MariaDB قدیمی وجود دارد و MySQL 8 آن را نمی‌پذیرد. این پروژه از MariaDB استفاده می‌کند (با دیتای MariaDB 10.6 سازگار است):
+```bash
+systemctl stop mysql 2>/dev/null; tar czf /root/mysql-datadir-backup.tgz -C /var/lib mysql
+apt-get remove -y mysql-server mysql-server-8.0 mysql-server-core-8.0 mysql-client-8.0 mysql-client-core-8.0
+rm -f /etc/mysql/FROZEN
+apt-get install -y mariadb-server
+systemctl status mariadb --no-pager | head -5
+```
+**پورت ۸۰۰۰ اشغال است:** `WEB_PORT=8123 sudo -E ./install.sh`

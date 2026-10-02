@@ -270,7 +270,7 @@ def backup():
             config.BACKUP_DIR.mkdir(parents=True, exist_ok=True)
             p = subprocess.run(
                 ["mysqldump", "-h", config.DB["host"], "-u", config.DB["user"], "--single-transaction",
-                 "--no-tablespaces", config.DB["database"]],
+                 config.DB["database"]],
                 capture_output=True, timeout=120, env={**os.environ, "MYSQL_PWD": config.DB["password"]})
             if p.returncode:
                 raise RuntimeError(p.stderr.decode()[:200])
