@@ -1,0 +1,13 @@
+{% extends "base.html" %}{% block title %}داشبورد{% endblock %}
+{% block body %}<h1>امروز</h1>
+<div class="stats">
+<div><span class="mut">درآمد</span><b>{{ s.income|irt }}</b></div>
+<div><span class="mut">هزینه</span><b>{{ s.expense|irt }}</b></div>
+<div><span class="mut">سود</span><b class="pos">{{ s.profit|irt }}</b></div>
+<div><span class="mut">ضرر</span><b class="neg">{{ s.loss|irt }}</b></div>
+<div><span class="mut">تراکنش</span><b>{{ s.count }}</b></div>
+<div><span class="mut">یادآوری فعال</span><b>{{ rem }}</b></div></div>
+<p class="mut">مبالغ به تومان، با قیمت نوبیتکس. {% if s.unpriced %}⚠️ {{ s.unpriced }} تراکنش بدون قیمت.{% endif %}</p>
+<h2>آخرین تراکنش‌ها</h2><div class="card"><table>
+{% for t in tx %}<tr><td>{{ '💰' if t.kind=='income' else '💸' }}</td><td>{{ t.amount.normalize()|string }} {{ t.currency }}</td><td><code>{{ t.tx_hash[:18] }}…</code></td><td>{{ t.description }}</td><td>{{ t.created_at.strftime('%Y-%m-%d %H:%M') }}</td></tr>
+{% else %}<tr><td class="mut">تراکنشی نیست.</td></tr>{% endfor %}</table></div>{% endblock %}

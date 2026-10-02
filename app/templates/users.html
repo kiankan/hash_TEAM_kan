@@ -1,0 +1,11 @@
+{% extends "base.html" %}{% block title %}کاربران{% endblock %}
+{% block body %}<h1>کاربران مجاز ربات</h1>
+<div class="card"><p class="mut">ادمین‌های اصلی (از .env): {% for i in env_ids %}<code>{{ i }}</code> {% endfor %}</p>
+<form method="post" action="{{ url_for('user_add') }}" class="row"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input name="telegram_id" placeholder="Telegram ID" inputmode="numeric" required><input name="name" placeholder="نام"><button>افزودن</button></form><br>
+<table>{% for u in allowed %}<tr><td><code>{{ u.telegram_id }}</code></td><td>{{ u.name }}</td><td>
+<form method="post" action="{{ url_for('user_delete', tid=u.telegram_id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="d">حذف</button></form></td></tr>{% endfor %}</table></div>
+<h1>ادمین‌های پنل</h1><div class="card">
+<form method="post" action="{{ url_for('admin_add') }}" class="row"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input name="username" placeholder="نام کاربری" required>
+<input name="password" type="password" placeholder="رمز (حداقل ۱۲ کاراکتر)" autocomplete="new-password" required><button>ساخت</button></form><br>
+<table>{% for a in admins %}<tr><td>{{ a.username }}</td><td>{{ a.created_at.strftime('%Y-%m-%d') }}</td><td>
+<form method="post" action="{{ url_for('admin_delete', i=a.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="d">حذف</button></form></td></tr>{% endfor %}</table></div>{% endblock %}

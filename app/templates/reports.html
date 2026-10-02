@@ -1,0 +1,6 @@
+{% extends "base.html" %}{% block title %}گزارش‌ها{% endblock %}
+{% block body %}<h1>گزارش روزانه (۳۰ روز اخیر)</h1>
+<div class="card"><table><tr><th>تاریخ</th><th>درآمد</th><th>هزینه</th><th>سود</th><th>ضرر</th><th>تراکنش</th></tr>
+{% for r in rows %}<tr><td>{{ r.d|jd }}</td><td>{{ r.income|irt }}</td><td>{{ r.expense|irt }}</td>
+<td class="pos">{{ r.profit|irt }}</td><td class="neg">{{ r.loss|irt }}</td><td>{{ r.cnt }}{% if r.unpriced %} <span class="mut">(⚠️ {{ r.unpriced|int }} بدون قیمت)</span>{% endif %}</td></tr>
+{% else %}<tr><td class="mut">داده‌ای نیست.</td></tr>{% endfor %}</table></div><p class="mut">مبالغ به تومان.</p>{% endblock %}

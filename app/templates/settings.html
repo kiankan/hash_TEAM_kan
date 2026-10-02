@@ -1,0 +1,5 @@
+{% extends "base.html" %}{% block title %}تنظیمات{% endblock %}
+{% block body %}<h1>تغییر رمز عبور</h1><div class="card"><form method="post" class="row" style="flex-direction:column;align-items:stretch;max-width:360px"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<input name="current" type="password" placeholder="رمز فعلی" autocomplete="current-password" required>
+<input name="new" type="password" placeholder="رمز جدید (حداقل ۱۲ کاراکتر)" autocomplete="new-password" required><button>تغییر</button></form></div>
+<p class="mut">قیمت لحظه‌ای USDT از نوبیتکس: {{ usdt|irt }} تومان</p>{% endblock %}

@@ -1,0 +1,6 @@
+{% extends "base.html" %}{% block title %}لاگ‌ها{% endblock %}
+{% block body %}<h1>ورودهای پنل</h1><div class="card"><table><tr><th>زمان</th><th>کاربر</th><th>IP</th><th>نتیجه</th></tr>
+{% for l in logins %}<tr><td>{{ l.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td><td>{{ l.username }}</td><td><code>{{ l.ip }}</code></td>
+<td class="{{ 'pos' if l.success else 'neg' }}">{{ 'موفق' if l.success else 'ناموفق' }}</td></tr>{% endfor %}</table></div>
+<h1>رویدادها</h1><div class="card"><table>{% for e in events %}<tr><td>{{ e.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td><td>{{ e.level }}</td><td>{{ e.message }}</td></tr>
+{% else %}<tr><td class="mut">رویدادی نیست.</td></tr>{% endfor %}</table></div>{% endblock %}
