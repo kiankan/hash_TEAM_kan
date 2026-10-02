@@ -33,7 +33,7 @@ BACKUP_RE = re.compile(r"^backup_\d{8}_\d{6}\.sql\.gz$")
 @app.after_request
 def headers(r):
     r.headers.update({
-        "X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
+        "X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "same-origin",
         "Cache-Control": "no-store",
         "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"})
     return r
