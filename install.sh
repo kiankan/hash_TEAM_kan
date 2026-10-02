@@ -1,186 +1,250 @@
 #!/usr/bin/env bash
-# نصب خودکار Hashbot روی Ubuntu/Debian:  sudo ./install.sh
 set -Eeuo pipefail
-trap 'echo "❌ خطا در خط $LINENO" >&2' ERR
 
-[[ $EUID -eq 0 ]] || { echo "با sudo اجرا کنید."; exit 1; }
-grep -qiE 'ubuntu|debian' /etc/os-release || { echo "فقط Ubuntu/Debian پشتیبانی می‌شود."; exit 1; }
+APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SERVICE_NAME="hashbot-bot"
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+ENV_FILE="${APP_DIR}/.env"
+BACKUP_DIR="${APP_DIR}/backups"
 
-SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_DIR=/opt/hashbot
-APP_USER=hashbot
-ENV_FILE="$APP_DIR/.env"
+GREEN='\033[0;32m'
+CYAN='\033[0;36m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
 
-ask() { # ask VAR "متن" [secret]
-  local var=$1 prompt=$2 secret=${3:-} val
-  [[ -n "${!var:-}" ]] && return
-  if [[ -n $secret ]]; then read -rsp "$prompt: " val; echo; else read -rp "$prompt: " val; fi
-  printf -v "$var" '%s' "$val"
+msg() { echo -e "${CYAN}$*${NC}"; }
+ok() { echo -e "${GREEN}$*${NC}"; }
+warn() { echo -e "${YELLOW}$*${NC}"; }
+err() { echo -e "${RED}$*${NC}"; }
+
+require_root() {
+    if [[ "${EUID}" -ne 0 ]]; then
+        err "این اسکریپت باید با root اجرا شود."
+        echo "مثال: sudo bash install.sh"
+        exit 1
+    fi
 }
 
-echo "== نصب Hashbot =="
-# اگر قبلاً نصب شده، مقادیر قبلی را بخوان
-if [[ -f $ENV_FILE ]]; then set -a; . "$ENV_FILE"; set +a; echo "(.env موجود خوانده شد)"; fi
+pause() {
+    echo
+    read -r -p "برای بازگشت Enter بزنید..."
+}
 
-ask BOT_TOKEN "توکن ربات تلگرام" secret
-ask ADMIN_TELEGRAM_IDS "Telegram ID ادمین(ها) (با کاما جدا کنید)"
-ask DOMAIN "دامنهٔ پنل (مثلاً bot.example.com — باید به IP این سرور اشاره کند)"
-ask LE_EMAIL "ایمیل برای گواهی SSL"
-ask PANEL_USER "نام کاربری ادمین پنل"
-if [[ -z "${PANEL_PASS:-}" ]]; then
-  while :; do
-    read -rsp "رمز ادمین پنل (حداقل ۱۲ کاراکتر): " PANEL_PASS; echo
-    read -rsp "تکرار رمز: " p2; echo
-    [[ ${#PANEL_PASS} -ge 12 && $PANEL_PASS == "$p2" ]] && break
-    echo "رمز کوتاه است یا یکسان نیست."
-  done
-fi
-[[ $BOT_TOKEN =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]]           || { echo "فرمت توکن نامعتبر است."; exit 1; }
-[[ $ADMIN_TELEGRAM_IDS =~ ^[0-9]+(,[0-9]+)*$ ]]       || { echo "Telegram ID نامعتبر است."; exit 1; }
-[[ $DOMAIN =~ ^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]       || { echo "دامنه نامعتبر است."; exit 1; }
-[[ $PANEL_USER =~ ^[A-Za-z0-9_.-]{3,32}$ ]]           || { echo "نام کاربری نامعتبر است."; exit 1; }
+install_deps() {
+    msg "در حال نصب وابستگی‌ها..."
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y python3 python3-venv python3-pip mariadb-server mariadb-client git rsync openssl cron curl
+    systemctl enable --now mariadb
+    systemctl enable --now cron
+    ok "وابستگی‌ها نصب شدند."
+}
 
-if [[ -e /etc/mysql/FROZEN ]]; then
-  echo "❌ MySQL در حالت frozen است (دیتای قدیمی MariaDB روی سرور). README بخش «عیب‌یابی» را ببینید."; exit 1
-fi
-WEB_PORT=${WEB_PORT:-8000}
-if ss -tln | grep -q ":$WEB_PORT " && ! systemctl is-active -q hashbot-web; then
-  echo "❌ پورت $WEB_PORT اشغال است. با WEB_PORT=8123 sudo -E ./install.sh دوباره اجرا کنید."; exit 1
-fi
+make_env() {
+    if [[ -f "$ENV_FILE" ]]; then
+        warn "فایل .env از قبل وجود دارد؛ بدون تغییر نگه داشته شد."
+        return
+    fi
 
-echo "== نصب بسته‌ها =="
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq python3 python3-venv python3-pip mariadb-server nginx certbot python3-certbot-nginx \
-  ufw git rsync openssl cron curl
-systemctl enable --now mariadb cron nginx
+    echo
+    read -r -p "BOT_TOKEN: " BOT_TOKEN
+    read -r -p "ADMIN_TELEGRAM_IDS (مثلاً 123456789): " ADMIN_IDS
+    read -r -p "DB_PASSWORD برای hashbot: " DB_PASSWORD
+    DB_PASSWORD="${DB_PASSWORD:-$(openssl rand -hex 16)}"
+    SECRET_KEY="$(openssl rand -hex 32)"
 
-echo "== کاربر و فایل‌ها =="
-id "$APP_USER" &>/dev/null || useradd --system --home "$APP_DIR" --shell /usr/sbin/nologin "$APP_USER"
-mkdir -p "$APP_DIR/backups"
-[[ "$SRC_DIR" == "$APP_DIR" ]] || rsync -a --exclude .env --exclude venv --exclude backups "$SRC_DIR/" "$APP_DIR/"
-chmod +x "$APP_DIR/manage.sh" "$APP_DIR/install.sh"
-ln -sf "$APP_DIR/manage.sh" /usr/local/bin/hashbot
+    cat > "$ENV_FILE" <<EOF
+BOT_TOKEN=${BOT_TOKEN}
+ADMIN_TELEGRAM_IDS=${ADMIN_IDS}
+TIMEZONE=Asia/Tehran
+SECRET_KEY=${SECRET_KEY}
 
-DB_NAME=${DB_NAME:-hashbot}; DB_USER=${DB_USER:-hashbot}
-DB_PASSWORD=${DB_PASSWORD:-$(openssl rand -hex 24)}
-SECRET_KEY=${SECRET_KEY:-$(openssl rand -hex 32)}
+DB_HOST=127.0.0.1
+DB_USER=hashbot
+DB_PASSWORD=${DB_PASSWORD}
+DB_NAME=hashbot
 
-echo "== دیتابیس (کاربر اختصاصی با حداقل دسترسی) =="
-cat > /etc/mysql/conf.d/hashbot.cnf <<CNF
-[mysqld]
-bind-address = 127.0.0.1
-local_infile = 0
-CNF
-systemctl restart mariadb
-mysql <<SQL
-CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
-ALTER USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
-REVOKE ALL PRIVILEGES, GRANT OPTION FROM '$DB_USER'@'localhost';
-GRANT SELECT, INSERT, UPDATE, DELETE, LOCK TABLES ON \`$DB_NAME\`.* TO '$DB_USER'@'localhost';
+BACKUP_DIR=${BACKUP_DIR}
+NOBITEX_API_KEY=
+EOF
+    chmod 600 "$ENV_FILE"
+    ok ".env ساخته شد."
+}
+
+setup_db() {
+    msg "در حال آماده‌سازی MariaDB..."
+    systemctl enable --now mariadb
+
+    if [[ ! -f "$ENV_FILE" ]]; then
+        warn "ابتدا گزینه 4 را اجرا کنید تا .env ساخته شود."
+        return 1
+    fi
+
+    set -a
+    # shellcheck disable=SC1090
+    source "$ENV_FILE"
+    set +a
+
+    mysql -uroot <<SQL
+CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DB_PASSWORD}';
+ALTER USER '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DB_PASSWORD}';
+GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'127.0.0.1';
 FLUSH PRIVILEGES;
 SQL
-mysql "$DB_NAME" < "$APP_DIR/schema.sql"
 
-echo "== .env =="
-umask 077
-cat > "$ENV_FILE" <<ENV
-BOT_TOKEN=$BOT_TOKEN
-ADMIN_TELEGRAM_IDS=$ADMIN_TELEGRAM_IDS
-DB_HOST=127.0.0.1
-DB_NAME=$DB_NAME
-DB_USER=$DB_USER
-DB_PASSWORD=$DB_PASSWORD
-SECRET_KEY=$SECRET_KEY
-TIMEZONE=${TIMEZONE:-Asia/Tehran}
-DOMAIN=$DOMAIN
-ENV
-chown -R "$APP_USER:$APP_USER" "$APP_DIR"
-chmod 600 "$ENV_FILE"; chmod 700 "$APP_DIR/backups"
+    if [[ -f "${APP_DIR}/schema.sql" ]]; then
+        mysql -h"${DB_HOST}" -u"${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" < "${APP_DIR}/schema.sql"
+    else
+        warn "schema.sql پیدا نشد؛ ساخت جدول‌ها انجام نشد."
+    fi
 
-echo "== Python =="
-runuser -u "$APP_USER" -- python3 -m venv "$APP_DIR/venv"
-runuser -u "$APP_USER" -- "$APP_DIR/venv/bin/pip" install -q --upgrade pip
-runuser -u "$APP_USER" -- "$APP_DIR/venv/bin/pip" install -q -r "$APP_DIR/requirements.txt"
-(cd "$APP_DIR" && runuser -u "$APP_USER" -- env ADMIN_USER="$PANEL_USER" ADMIN_PASS="$PANEL_PASS" \
-  "$APP_DIR/venv/bin/python" -m app.create_admin)
+    ok "دیتابیس آماده شد."
+}
 
-echo "== systemd =="
-for svc in bot web; do
-  if [[ $svc == bot ]]; then EXEC="$APP_DIR/venv/bin/python -m app.bot"; DESC="Telegram bot"
-  else EXEC="$APP_DIR/venv/bin/gunicorn -w 1 --threads 4 -b 127.0.0.1:$WEB_PORT app.web:app"; DESC="admin panel"; fi
-  cat > "/etc/systemd/system/hashbot-$svc.service" <<UNIT
+install_python() {
+    if [[ ! -d "${APP_DIR}/.venv" ]]; then
+        python3 -m venv "${APP_DIR}/.venv"
+    fi
+
+    "${APP_DIR}/.venv/bin/pip" install --upgrade pip
+    if [[ -f "${APP_DIR}/requirements.txt" ]]; then
+        "${APP_DIR}/.venv/bin/pip" install -r "${APP_DIR}/requirements.txt"
+    fi
+
+    ok "محیط Python آماده شد."
+}
+
+install_service() {
+    if [[ ! -f "${APP_DIR}/app/bot.py" ]]; then
+        err "app/bot.py پیدا نشد."
+        return 1
+    fi
+
+    cat > "$SERVICE_FILE" <<EOF
 [Unit]
-Description=Hashbot $DESC
+Description=HashBot Telegram Bot
 After=network-online.target mariadb.service
 Wants=network-online.target
 
 [Service]
-User=$APP_USER
-WorkingDirectory=$APP_DIR
-ExecStart=$EXEC
+Type=simple
+WorkingDirectory=${APP_DIR}
+EnvironmentFile=${ENV_FILE}
+ExecStart=${APP_DIR}/.venv/bin/python ${APP_DIR}/app/bot.py
 Restart=always
 RestartSec=5
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=$APP_DIR/backups
+User=root
 
 [Install]
 WantedBy=multi-user.target
-UNIT
-done
-systemctl daemon-reload
-systemctl enable --now hashbot-bot hashbot-web
+EOF
 
-echo "== Nginx + HTTPS =="
-cat > /etc/nginx/sites-available/hashbot <<NGINX
-limit_req_zone \$binary_remote_addr zone=hashbot:10m rate=10r/s;
-server {
-    listen 80;
-    server_name $DOMAIN;
-    server_tokens off;
-    client_max_body_size 1m;
-    add_header Strict-Transport-Security "max-age=31536000" always;
-    location /admin {
-        limit_req zone=hashbot burst=20 nodelay;
-        proxy_pass http://127.0.0.1:$WEB_PORT;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Forwarded-For \$remote_addr;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-    location / { return 404; }
+    # وب‌سرویس قدیمی دیگر استفاده نمی‌شود.
+    systemctl disable --now hashbot-web.service 2>/dev/null || true
+    rm -f /etc/systemd/system/hashbot-web.service
+
+    systemctl daemon-reload
+    systemctl enable "$SERVICE_NAME"
+    systemctl restart "$SERVICE_NAME"
+
+    ok "سرویس Bot نصب و فعال شد."
 }
-NGINX
-ln -sf /etc/nginx/sites-available/hashbot /etc/nginx/sites-enabled/hashbot
-nginx -t && systemctl reload nginx
-if ! certbot --nginx -d "$DOMAIN" -m "$LE_EMAIL" --agree-tos --no-eff-email --redirect -n; then
-  echo "⚠️ دریافت SSL ناموفق بود (آیا DNS دامنه به این سرور اشاره می‌کند؟)."
-  echo "   بعد از اصلاح: sudo certbot --nginx -d $DOMAIN -m $LE_EMAIL --agree-tos --redirect"
-  echo "   تا زمان فعال شدن HTTPS ورود به پنل کار نمی‌کند (کوکی فقط روی HTTPS ارسال می‌شود)."
-fi
 
-echo "== فایروال و بکاپ خودکار =="
-SSH_PORT=$(awk '/^Port /{print $2; exit}' /etc/ssh/sshd_config 2>/dev/null || true)
-if ufw status | grep -q "Status: active"; then
-  ufw allow "${SSH_PORT:-22}/tcp" >/dev/null; ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null
-else
-  echo "فایروال ufw الان غیرفعال است. فعال‌سازی ممکن است پورت‌های سرویس‌های دیگر این سرور را ببندد."
-  read -rp "فعال شود؟ (y/N): " yn
-  if [[ $yn == [yY] ]]; then
-    ufw allow "${SSH_PORT:-22}/tcp" >/dev/null; ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null
-    ufw --force enable >/dev/null
-  fi
-fi
-echo "0 3 * * * $APP_USER $APP_DIR/manage.sh backup >/dev/null 2>&1" > /etc/cron.d/hashbot
-chmod 644 /etc/cron.d/hashbot
+setup_backup() {
+    mkdir -p "$BACKUP_DIR"
+    chmod 700 "$BACKUP_DIR"
 
-cat <<DONE
+    cat > /usr/local/bin/hashbot-backup <<EOF
+#!/usr/bin/env bash
+set -e
+set -a
+source "${ENV_FILE}"
+set +a
+mkdir -p "\${BACKUP_DIR}"
+STAMP="\$(date +%Y%m%d_%H%M%S)"
+mysqldump -h"\${DB_HOST}" -u"\${DB_USER}" -p"\${DB_PASSWORD}" "\${DB_NAME}" | gzip > "\${BACKUP_DIR}/db_\${STAMP}.sql.gz"
+find "\${BACKUP_DIR}" -type f -name 'db_*.sql.gz' -mtime +7 -delete
+EOF
+    chmod 700 /usr/local/bin/hashbot-backup
 
-✅ نصب کامل شد.
-   پنل:  https://$DOMAIN/admin   (کاربر: $PANEL_USER)
-   ربات: در تلگرام /start بزنید.
-   مدیریت: sudo hashbot help
-DONE
+    cat > /etc/cron.d/hashbot-backup <<EOF
+0 4 * * * root /usr/local/bin/hashbot-backup >/dev/null 2>&1
+EOF
+    chmod 644 /etc/cron.d/hashbot-backup
+    systemctl restart cron
+
+    ok "بکاپ روزانه تنظیم شد."
+}
+
+status_bot() {
+    echo
+    systemctl --no-pager --full status "$SERVICE_NAME" || true
+    echo
+    echo "آخرین لاگ‌ها:"
+    journalctl -u "$SERVICE_NAME" -n 20 --no-pager || true
+}
+
+restart_bot() {
+    systemctl restart "$SERVICE_NAME"
+    ok "Bot ری‌استارت شد."
+    systemctl --no-pager --full status "$SERVICE_NAME" | sed -n '1,12p' || true
+}
+
+logs_bot() {
+    journalctl -u "$SERVICE_NAME" -n 100 --no-pager
+}
+
+full_install() {
+    install_deps
+    make_env
+    setup_db
+    install_python
+    install_service
+    setup_backup
+    ok "نصب کامل HashBot انجام شد."
+}
+
+menu() {
+    clear
+    echo "╔══════════════════════════════════════╗"
+    echo "║          HashBot Installer           ║"
+    echo "╚══════════════════════════════════════╝"
+    echo
+    echo "1) نصب کامل HashBot"
+    echo "2) نصب وابستگی‌ها"
+    echo "3) ساخت دیتابیس"
+    echo "4) تنظیم فایل .env"
+    echo "5) نصب و فعال‌سازی سرویس Bot"
+    echo "6) تنظیم بکاپ خودکار"
+    echo "7) بررسی وضعیت نصب"
+    echo "8) ری‌استارت Bot"
+    echo "9) نمایش لاگ Bot"
+    echo "0) خروج"
+    echo
+    read -r -p "انتخاب شما: " choice
+    echo
+
+    case "$choice" in
+        1) full_install ;;
+        2) install_deps ;;
+        3) setup_db ;;
+        4) make_env ;;
+        5) install_python && install_service ;;
+        6) setup_backup ;;
+        7) status_bot ;;
+        8) restart_bot ;;
+        9) logs_bot ;;
+        0) exit 0 ;;
+        *) warn "گزینه نامعتبر است." ;;
+    esac
+
+    pause
+}
+
+require_root
+
+while true; do
+    menu
+done
