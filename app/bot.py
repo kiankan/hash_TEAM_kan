@@ -98,6 +98,20 @@ async def add_step(update, ctx, val: str):
         if services.hash_exists(h):
             return await reply(update, "⛔ این Hash قبلاً ثبت شده است.", CANCEL)
         d["hash"] = h
+        detected = await asyncio.to_thread(services.detect_tx, h)
+        if detected:
+            d["network"] = detected["network"]
+            d["currency"] = detected["currency"]
+            d["amount"] = detected["amount"]
+            frm, to = detected.get("from") or "-", detected.get("to") or "-"
+            await reply(
+                update,
+                f"✅ شبکه و مقدار خودکار شناسایی شد: "
+                f"{format(detected['amount'].normalize(), 'f')} {esc(detected['currency'])} "
+                f"({esc(detected['network'])})\n"
+                f"📤 از: <code>{esc(frm)}</code>\n📥 به: <code>{esc(to)}</code>",
+            )
+            return await ask(update, ctx, "kind")
     elif step in ("network", "currency"):
         if not re.fullmatch(r"[A-Za-z0-9 ._-]{1,16}", val):
             return await reply(update, "❌ مقدار نامعتبر است. دوباره بفرستید:", PROMPTS[step][1])
